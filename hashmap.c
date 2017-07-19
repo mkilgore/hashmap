@@ -1,6 +1,9 @@
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+
 #include "hashmap.h"
+#include "object_pool.h"
 
 typedef struct Pair {
     const void *key;
@@ -13,9 +16,13 @@ struct Hashmap {
     Pair **buckets;
     HashFunction hash;
     ComparisonFunction compare;
+    object_pool *pool;
 };
 
-static Pair *pair_new(const void *key, void *value);
+/* Number of Pair objects in each memory pool */
+#define PAIR_POOL_SIZE 50
+
+static Pair *pair_new(Hashmap *hashmap, const void *key, void *value);
 static Pair **get_bucket(Hashmap *hashmap, const void *key);
 static Pair **get_pair_ptr(Hashmap *hashmap, const void *key);
 static void init_buckets(Hashmap *hashmap);
@@ -39,6 +46,8 @@ Hashmap *hashmap_new(size_t num_buckets,
 
     init_buckets(hashmap);
 
+    hashmap->pool = object_pool_new(sizeof(Pair), PAIR_POOL_SIZE);
+
     return hashmap;
 
 error_buckets_alloc:
@@ -61,7 +70,7 @@ int hashmap_set(Hashmap *hashmap, const void *key,
     }
 
     if (*pair_ptr == NULL) {
-        *pair_ptr = pair_new(key, value);
+        *pair_ptr = pair_new(hashmap, key, value);
     } else {
         (*pair_ptr)->value = value;
     }
@@ -80,19 +89,19 @@ void *hashmap_delete(Hashmap *hashmap, const void *key) {
     if (*pair_ptr != NULL) {
         value = (*pair_ptr)->value;
         Pair *next_pair = (*pair_ptr)->next;
-        free(*pair_ptr);
+        /* object_pool_put(hashmap->pool, *pair_ptr); */
         *pair_ptr = next_pair;
     }
 
     return value;
 }
 
-static Pair *pair_new(const void *key, void *value) {
+static Pair *pair_new(Hashmap *hashmap, const void *key, void *value) {
     /* Since key is const, it'll have to be copied over from a struct that's
      * already initialized.
      */
     Pair init = {.key = key, .value = value, .next = NULL};
-    Pair *pair = malloc(sizeof(Pair));
+    Pair *pair = object_pool_get(hashmap->pool);
     if (pair != NULL) {
         memcpy(pair, &init, sizeof(Pair));
     }
@@ -126,13 +135,6 @@ static void init_buckets(Hashmap *hashmap) {
 }
 
 static void free_buckets(Hashmap *hashmap) {
-    for (size_t i = 0; i < hashmap->num_buckets; i++) {
-        Pair *pair = hashmap->buckets[i];
-        Pair *prev_pair = NULL;
-        while (pair != NULL) {
-            prev_pair = pair;
-            pair = pair->next;
-            free(prev_pair);
-        }
-    }
+    object_pool_free(hashmap->pool);
 }
+
